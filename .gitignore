@@ -1,0 +1,16 @@
+# Ignore large model weights and backup files
+telco_expert_master_integrated_lora/
+trimmed_phase_2_Completed_backup_AMD.tar.gz
+phase_2_Completed_backip_AMD/
+unsloth_compiled_cache/
+
+# Python caching
+__pycache__/
+*.pyc
+
+# IDEs & System files
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

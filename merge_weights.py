@@ -113,7 +113,6 @@ def main():
         os.makedirs(args.offload_folder, exist_ok=True)
         offload_kwargs = {
             "offload_folder": args.offload_folder,
-            "offload_state_dict": True
         }
 
     print("\n📥 Step 1: Loading Tokenizer...")
@@ -150,8 +149,7 @@ def main():
         model = PeftModel.from_pretrained(
             base_model,
             args.adapter_path,
-            device_map=device_map,
-            **offload_kwargs
+            device_map=device_map
         )
         print("✓ Adapters attached successfully.")
     except Exception as e:

@@ -11,6 +11,14 @@ import time
 import warnings
 import subprocess
 import streamlit as st
+from rag.spec_retriever import SpecRetriever, build_augmented_system_prompt
+
+# 📥 RAG SpecRetriever Initialization
+@st.cache_resource
+def load_spec_retriever():
+    return SpecRetriever(use_embeddings=False)
+
+retriever = load_spec_retriever()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. STREAMLIT PAGE CONFIG
@@ -874,6 +882,11 @@ def render_message(role, content, is_streaming=False):
 # Display stored conversation history
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
+    if msg.get("role") == "assistant" and msg.get("retrieved_specs"):
+        with st.expander("📚 Grounded 3GPP Reference Specifications", expanded=False):
+            for r in msg["retrieved_specs"]:
+                st.markdown(f"**{r['spec_id']} — Section {r['section']}** *({r['title']})*")
+                st.caption(r['content'])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8. EXAMPLE SCENARIOS
@@ -951,7 +964,13 @@ if effective_input:
 if st.session_state.is_generating and len(st.session_state.messages) > 0:
     effective_input = st.session_state.messages[-1]["content"]
 
-    render_status_bar("generating", "Contacting inference cluster backend...")
+    # ── RAG Context Retrieval & Augmentation ──
+    render_status_bar("generating", "🔍 RAG Active · Querying 3GPP Specification Index...")
+    retrieved_specs = retriever.retrieve(effective_input, top_k=3)
+    st.session_state.current_retrieved_specs = retrieved_specs
+    
+    spec_ids = ", ".join(set(r['spec_id'] for r in retrieved_specs))
+    render_status_bar("generating", f"🔍 RAG Active · Found {spec_ids} · Contacting backend server...")
     start_time = time.time()
 
     # Log detection
@@ -987,9 +1006,15 @@ if st.session_state.is_generating and len(st.session_state.messages) > 0:
         st.session_state.is_generating = False
         st.stop()
 
-    # Format the prompt messages
+    # Format the prompt messages with RAG Context
+    augmented_system_instruction = build_augmented_system_prompt(
+        system_instruction,
+        effective_input,
+        retriever,
+        top_k=3
+    )
     formatted_messages = [
-        {"role": "system", "content": system_instruction}
+        {"role": "system", "content": augmented_system_instruction}
     ]
     # Build history (exclude current user msg since we inject it with log analysis)
     for msg in st.session_state.messages[:-1]:
@@ -1070,7 +1095,11 @@ if st.session_state.is_generating and len(st.session_state.messages) > 0:
     final_tps = token_count / response_time if response_time > 0 else 0
 
     # Persist in history
-    st.session_state.messages.append({"role": "assistant", "content": compiled_text})
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": compiled_text,
+        "retrieved_specs": st.session_state.get("current_retrieved_specs", [])
+    })
     st.session_state.total_queries += 1
     st.session_state.total_response_time += response_time
     st.session_state.total_tokens_generated += token_count
@@ -1080,6 +1109,7 @@ if st.session_state.is_generating and len(st.session_state.messages) > 0:
     st.session_state.last_tps = final_tps
 
     st.session_state.is_generating = False
+    st.session_state.current_retrieved_specs = []
     st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════

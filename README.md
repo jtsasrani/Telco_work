@@ -44,6 +44,45 @@ python evaluation/benchmark.py
 
 ---
 
+## ⚡ Production Deployment & Scaling (Decoupled Serving)
+
+To transition from the Jupyter development container to a high-throughput, low-latency production NOC environment, we support **decoupled serving** utilizing **vLLM** on the AMD MI300X and a lightweight, zero-VRAM frontend client.
+
+### 1. Merge LoRA Weights
+Standard 4-bit loading does not support direct weight merging. Run the portable fusion script to merge the trained LoRA adapters into the unquantized base model. This can be run on the main node or any other GPU system (supports CPU offloading if VRAM is limited):
+
+```bash
+# Run the merge utility (requires HuggingFace token for gated Llama access)
+python merge_weights.py \
+    --base-model meta-llama/Llama-3.3-70B-Instruct \
+    --adapter-path telco_expert_master_integrated_lora \
+    --output-dir /workspace/telco_expert_llama3_3_70b_merged \
+    --hf-token <YOUR_HF_TOKEN>
+```
+*Options like `--device cpu` and `--offload-folder temp_dir` can be used to merge on systems with standard system RAM and smaller GPUs.*
+
+### 2. Start the vLLM Serving Engine
+Host the fused model using vLLM, which utilizes AMD MI300X vLLM kernels (PagedAttention, continuous batching) for maximum token-generation speed:
+
+```bash
+# Start the OpenAI-compatible vLLM server
+python -m vllm.entrypoints.openai.api_server \
+    --model /workspace/telco_expert_llama3_3_70b_merged \
+    --port 8000 \
+    --dtype bfloat16 \
+    --max-model-len 4096
+```
+
+### 3. Launch the Decoupled Client
+Launch the client application, which communicates with the vLLM engine via the OpenAI API protocol. This frontend initializes in < 1 second and consumes ~0 VRAM, preventing multi-process GPU conflicts:
+
+```bash
+streamlit run app_v3_decoupled.py --server.port 8503 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+```
+*Configure the API host (`http://localhost:8000/v1`) and Model ID directly from the "Inference API Settings" panel in the sidebar.*
+
+---
+
 ## 🏗️ Technical Architecture & Innovations
 
 ### 1. QLoRA Quantization
@@ -88,7 +127,9 @@ Scored across 30 test queries spanning 7 categories (Handover Failures, VoNR Cal
 
 ## 📂 Deliverables Package
 
-* `app_v2.py` — Upgraded Streamlit UI with light/dark theme toggling, last-query statistics, active GPU compute telemetry, and reset options.
+* `app_v2.py` — Development Streamlit UI with inline PyTorch model loading and inference pipelines.
+* `app_v3_decoupled.py` — Production-grade Streamlit UI client that offloads model execution to a decoupled backend engine (e.g. vLLM) for zero-VRAM frontend serving.
+* `merge_weights.py` — Portable weights fusion script that merges LoRA adapters with unquantized base models (supports CPU-offload for low VRAM nodes).
 * `demo_script.md` — A structured 5-7 minute video recording narration script.
 * `evaluation/` — Scripts and assets for quantitative benchmark evaluations, including training analysis curves.
 * `presentation/` — Detailed PowerPoint slide structure in `slide_content.md`.

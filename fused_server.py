@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from rag.spec_retriever import SpecRetriever, build_augmented_system_prompt
 
 warnings.filterwarnings("ignore")
 
@@ -36,10 +37,11 @@ MODEL_PATH = "/workspace/telco_expert_llama3_3_70b_merged"
 # Global model pointers
 model = None
 tokenizer = None
+retriever = None
 
 @app.on_event("startup")
 def load_model():
-    global model, tokenizer
+    global model, tokenizer, retriever
     print("=" * 70)
     print("🚀 Mounting Fused Llama-3.3-70B Model into HBM3 Lanes (Standard HF Loader)...")
     print("=" * 70)
@@ -54,8 +56,13 @@ def load_model():
         )
         model.eval()
         print(f"✓ Fused model and tokenizer loaded successfully in {time.time() - start_time:.1f}s!")
+        
+        # Load RAG retriever
+        print("📥 Initializing 3GPP Specification RAG Index (TF-IDF fallback)...")
+        retriever = SpecRetriever(use_embeddings=False)
+        print("✓ SpecRetriever initialized successfully.")
     except Exception as e:
-        print(f"❌ Failed to load model from {MODEL_PATH}: {e}")
+        print(f"❌ Failed to load model or retriever from {MODEL_PATH}: {e}")
         sys.exit(1)
 
 @app.post("/v1/chat/completions")
@@ -66,6 +73,33 @@ async def chat_completions(request: Request):
     max_tokens = body.get("max_tokens", 700)
     stream = body.get("stream", False)
     repetition_penalty = body.get("frequency_penalty", 1.2)
+
+    # ── RAG Context Augmentation ──
+    system_msg_idx = -1
+    user_query = ""
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "system":
+            system_msg_idx = i
+        elif msg.get("role") == "user":
+            user_query = msg.get("content", "")
+
+    if system_msg_idx != -1 and user_query and retriever:
+        base_system_prompt = messages[system_msg_idx]["content"]
+        
+        # Perform retrieval
+        start_rag = time.time()
+        results = retriever.retrieve(user_query, top_k=3)
+        print(f"🔍 [RAG] Query: '{user_query[:60]}...' -> Found {len(results)} spec citations (took {time.time() - start_rag:.3f}s).")
+        for idx, r in enumerate(results):
+            print(f"    - [{idx+1}] {r['spec_id']} Section {r['section']} (Score: {r['relevance_score']:.4f})")
+        
+        augmented_system_prompt = build_augmented_system_prompt(
+            base_system_prompt,
+            user_query,
+            retriever,
+            top_k=3
+        )
+        messages[system_msg_idx]["content"] = augmented_system_prompt
 
     # Reconstruct prompt using Chat Template
     prompt = tokenizer.apply_chat_template(

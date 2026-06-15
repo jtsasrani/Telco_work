@@ -809,7 +809,7 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. MAIN AREA — Header & Day/Night Theme Switcher
 # ═══════════════════════════════════════════════════════════════════════════════
-hc1, hc2, hc3 = st.columns([7.0, 1.5, 1.5])
+hc1, hc2 = st.columns([8.2, 1.8])
 with hc1:
     st.markdown("""
     <div class="header-container" style="margin-bottom: 0px; padding: 18px 24px;">
@@ -821,21 +821,6 @@ with hc1:
     """, unsafe_allow_html=True)
 
 with hc2:
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-    if st.session_state.is_generating:
-        st.button("🗑️ Resetting...", disabled=True, use_container_width=True, key="reset_disabled")
-    else:
-        if st.button("🗑️ Reset Chat", use_container_width=True, key="reset_chat"):
-            st.session_state.messages = []
-            st.session_state.total_queries = 0
-            st.session_state.total_response_time = 0.0
-            st.session_state.total_tokens_generated = 0
-            st.session_state.last_response_time = 0.0
-            st.session_state.last_tokens_generated = 0
-            st.session_state.last_tps = 0.0
-            st.rerun()
-
-with hc3:
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     if st.session_state.is_generating:
         st.button("⚙️ Running...", disabled=True, use_container_width=True, key="theme_toggle_disabled")
@@ -931,6 +916,20 @@ if "pending_input" in st.session_state:
     pending = st.session_state.pending_input
     del st.session_state.pending_input
     st.session_state.active_input = pending
+
+# Clear Chat History Button (Rendered directly above input box)
+if len(st.session_state.messages) > 0 and not st.session_state.is_generating:
+    _, btn_col = st.columns([8.2, 1.8])
+    with btn_col:
+        if st.button("🗑️ Clear Chat", key="clear_chat_bottom", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.total_queries = 0
+            st.session_state.total_response_time = 0.0
+            st.session_state.total_tokens_generated = 0
+            st.session_state.last_response_time = 0.0
+            st.session_state.last_tokens_generated = 0
+            st.session_state.last_tps = 0.0
+            st.rerun()
 
 # Chat input
 user_input = st.chat_input("Describe a network issue, paste system logs, or ask a telecom question...")

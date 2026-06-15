@@ -717,38 +717,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Settings & Controls ──
-    st.markdown('<div class="glass-card"><div class="card-title">⚙️ Control Center</div>', unsafe_allow_html=True)
-    if st.button("🗑️ Reset Conversation", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.total_queries = 0
-        st.session_state.total_response_time = 0.0
-        st.session_state.total_tokens_generated = 0
-        st.session_state.last_response_time = 0.0
-        st.session_state.last_tokens_generated = 0
-        st.session_state.last_tps = 0.0
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── Decoupled Server Endpoint Settings ──
-    st.markdown('<div class="glass-card"><div class="card-title">🔌 Inference API Settings</div>', unsafe_allow_html=True)
-    st.session_state.api_url = st.text_input(
-        "API Base URL", 
-        value=st.session_state.api_url, 
-        help="vLLM server API endpoint"
-    )
-    st.session_state.api_key = st.text_input(
-        "API Key (Optional)", 
-        value=st.session_state.api_key, 
-        type="password", 
-        help="Key if backend requires authentication (otherwise use 'none')"
-    )
-    st.session_state.api_model = st.text_input(
-        "Model ID", 
-        value=st.session_state.api_model, 
-        help="Model ID configured in vLLM server"
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Model Architecture Card ──
     st.markdown("""
@@ -841,7 +809,7 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. MAIN AREA — Header & Day/Night Theme Switcher
 # ═══════════════════════════════════════════════════════════════════════════════
-hc1, hc2 = st.columns([8.2, 1.8])
+hc1, hc2, hc3 = st.columns([7.0, 1.5, 1.5])
 with hc1:
     st.markdown("""
     <div class="header-container" style="margin-bottom: 0px; padding: 18px 24px;">
@@ -853,6 +821,21 @@ with hc1:
     """, unsafe_allow_html=True)
 
 with hc2:
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    if st.session_state.is_generating:
+        st.button("🗑️ Resetting...", disabled=True, use_container_width=True, key="reset_disabled")
+    else:
+        if st.button("🗑️ Reset Chat", use_container_width=True, key="reset_chat"):
+            st.session_state.messages = []
+            st.session_state.total_queries = 0
+            st.session_state.total_response_time = 0.0
+            st.session_state.total_tokens_generated = 0
+            st.session_state.last_response_time = 0.0
+            st.session_state.last_tokens_generated = 0
+            st.session_state.last_tps = 0.0
+            st.rerun()
+
+with hc3:
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     if st.session_state.is_generating:
         st.button("⚙️ Running...", disabled=True, use_container_width=True, key="theme_toggle_disabled")

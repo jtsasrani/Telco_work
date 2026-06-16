@@ -791,20 +791,31 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # ── RAG Engine Status Card ──
+    rerank_label = "Active" if getattr(retriever, "has_reranker", False) else "Inactive (Fallback)"
     if retriever.use_embeddings:
-        rag_status_title = "Active (Vector Embeddings)"
-        rag_status_desc = f"FAISS search active with {len(retriever.knowledge_base)} document chunks."
+        rag_status_title = "Hybrid Search (Dense + Sparse)"
+        rag_status_desc = (
+            f"FAISS vector + BM25 keyword index active.<br/>"
+            f"Grounded Chunks: {len(retriever.knowledge_base)} items<br/>"
+            f"Reciprocal Rank Fusion (RRF): Active<br/>"
+            f"Cross-Encoder Reranker: {rerank_label}"
+        )
     else:
-        rag_status_title = "Active (TF-IDF Fallback)"
-        rag_status_desc = f"Keyword search active over {len(retriever.knowledge_base)} protocol IEs."
+        rag_status_title = "Hybrid Search (TF-IDF Fallback)"
+        rag_status_desc = (
+            f"BM25 + TF-IDF keyword search active.<br/>"
+            f"Core Chunks: {len(retriever.knowledge_base)} items<br/>"
+            f"Reciprocal Rank Fusion (RRF): Active<br/>"
+            f"Cross-Encoder Reranker: {rerank_label}"
+        )
 
     st.markdown(f"""
     <div class="glass-card">
         <div class="card-title">🔍 RAG Engine Status</div>
-        <div style="font-size: 14px; font-weight: 700; color: var(--accent-cyan); margin-bottom: 4px;">
+        <div style="font-size: 13px; font-weight: 700; color: var(--accent-cyan); margin-bottom: 6px;">
             {rag_status_title}
         </div>
-        <div style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); line-height: 1.4;">
+        <div style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); line-height: 1.5;">
             {rag_status_desc}
         </div>
     </div>
@@ -1021,12 +1032,12 @@ if st.session_state.is_generating and len(st.session_state.messages) > 0:
     effective_input = st.session_state.messages[-1]["content"]
 
     # ── RAG Context Retrieval & Augmentation ──
-    render_status_bar("generating", "🔍 RAG Active · Querying 3GPP Specification Index...")
+    render_status_bar("generating", "🔍 RAG Active · Querying SOTA Hybrid Index (FAISS + BM25)...")
     retrieved_specs = retriever.retrieve(effective_input, top_k=3)
     st.session_state.current_retrieved_specs = retrieved_specs
     
     spec_ids = ", ".join(set(r['spec_id'] for r in retrieved_specs))
-    render_status_bar("generating", f"🔍 RAG Active · Found {spec_ids} · Contacting backend server...")
+    render_status_bar("generating", f"🔍 RAG Active · Found {spec_ids} via RRF · Contacting backend server...")
     start_time = time.time()
 
     # Log detection

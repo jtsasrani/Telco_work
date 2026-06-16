@@ -1,17 +1,19 @@
 """
-3GPP Specification RAG (Retrieval-Augmented Generation) Module - Upgraded
-========================================================================
+3GPP Specification RAG (Retrieval-Augmented Generation) Module - SOTA Hybrid
+===========================================================================
 Provides context-aware 3GPP spec retrieval to augment the fine-tuned model's
 responses with actual specification text, enabling precise citations.
 
-Supports loading pre-built FAISS vector indices from disk on AMD MI300X,
-with graceful fallback to TF-IDF on CPU/client setups.
+Implements Hybrid Search (FAISS dense vector + BM25 sparse lexical search)
+fused via Reciprocal Rank Fusion (RRF) and re-ranked using a Cross-Encoder.
 """
 
 import os
 import json
 import re
 import pickle
+import math
+from collections import Counter
 from typing import List, Dict, Tuple, Optional
 
 # ============================================================================
@@ -272,135 +274,95 @@ SPEC_KNOWLEDGE_BASE = [
         ),
         "keywords": ["VoNR", "SIP", "IMS", "P-CSCF", "S-CSCF", "SDP", "503", "QoS flow"]
     },
-    # Network Slicing
-    {
-        "spec_id": "TS 23.501",
-        "title": "System architecture for the 5G System (5GS)",
-        "section": "5.15 Network Slicing",
-        "content": (
-            "Network slicing allows multiple logical networks (slices) on shared physical infrastructure. "
-            "S-NSSAI (Single Network Slice Selection Assistance Information) consists of: "
-            "SST (Slice/Service Type: 1=eMBB, 2=URLLC, 3=MIoT, 4=V2X) and SD (Slice Differentiator). "
-            "NSSF (Network Slice Selection Function) selects the appropriate AMF set and allowed NSSAI. "
-            "UE includes requested NSSAI in Registration Request. AMF validates against subscribed NSSAI "
-            "and returns allowed NSSAI. Different slices can have independent SMF, UPF instances "
-            "with slice-specific QoS and isolation guarantees."
-        ),
-        "keywords": ["network slicing", "S-NSSAI", "SST", "NSSF", "eMBB", "URLLC", "MIoT"]
-    },
-    # Beam Management
-    {
-        "spec_id": "TS 38.321",
-        "title": "NR; MAC protocol specification",
-        "section": "5.17 Beam Failure Detection and Recovery",
-        "content": (
-            "Beam failure detection: UE monitors PDCCH quality on active beam(s). If the hypothetical "
-            "BLER exceeds threshold (beamFailureInstanceMaxCount times within beamFailureDetectionTimer), "
-            "beam failure instance is declared. After beamFailureInstanceMaxCount instances, "
-            "beam failure is declared. Recovery: UE selects new candidate beam from SSB/CSI-RS measurements, "
-            "transmits BFRQ (Beam Failure Recovery Request) on dedicated PRACH resource, "
-            "monitors CORESET-BFR for gNB response (DCI). If no response within bfr-Timer, "
-            "UE retransmits up to ra-preambleReceivedTargetPower limit."
-        ),
-        "keywords": ["beam failure", "BFRQ", "SSB", "CSI-RS", "beam recovery", "CORESET-BFR", "PRACH"]
-    },
-    # Massive MIMO
-    {
-        "spec_id": "TS 38.214",
-        "title": "NR; Physical layer procedures for data",
-        "section": "5.2.2 Precoding for massive MIMO",
-        "content": (
-            "Massive MIMO uses large antenna arrays (32T32R, 64T64R) for spatial multiplexing and beamforming. "
-            "CSI framework: Type I codebook (wideband, low overhead) and Type II codebook (subband, "
-            "high resolution for MU-MIMO). PMI feedback enables the gNB to compute precoding matrices. "
-            "SRS (Sounding Reference Signal) enables uplink channel estimation for TDD reciprocity-based beamforming. "
-            "Beam management framework: P1 (initial beam acquisition via SSB sweep), "
-            "P2 (beam refinement at gNB), P3 (beam refinement at UE). "
-            "Coverage holes occur when beam sweeping misses UE positions or when inter-beam interference "
-            "is not properly managed by the scheduler."
-        ),
-        "keywords": ["massive MIMO", "beamforming", "codebook", "SRS", "beam management", "precoding", "SSB sweep"]
-    },
-    # RAN Energy Efficiency
-    {
-        "spec_id": "TS 38.300",
-        "title": "NR; NR and NG-RAN Overall Description",
-        "section": "15.4 Energy Saving",
-        "content": (
-            "RAN energy saving mechanisms: 1) Cell DTX/DRX: Discontinuous transmission/reception at cell level, "
-            "turning off transmissions when no UEs need service. 2) SSB-less operation: Reducing SSB beam "
-            "sweeping to save power during low traffic. 3) Carrier shutdown: Deactivating secondary carriers "
-            "during low load periods. 4) MIMO layer adaptation: Reducing active antenna elements when "
-            "full capacity is not needed. 5) Network-controlled small cell on/off: Activating small cells "
-            "only when macro capacity is insufficient. OAM coordination via O-RAN Alliance interfaces "
-            "(A1, O1) enables AI/ML-driven energy optimization policies."
-        ),
-        "keywords": ["energy saving", "cell DTX", "carrier shutdown", "MIMO adaptation", "O-RAN"]
-    },
-    # QoS
-    {
-        "spec_id": "TS 23.501",
-        "title": "System architecture for the 5G System (5GS)",
-        "section": "5.7 QoS model",
-        "content": (
-            "5G QoS model is flow-based. Each QoS flow has a QFI (QoS Flow Identifier) and is associated "
-            "with a 5QI value defining: Resource Type (GBR, Delay-critical GBR, Non-GBR), "
-            "Priority Level, Packet Delay Budget, Packet Error Rate, Averaging Window. "
-            "Standardized 5QI values: 1 (Conversational Voice, GBR, 100ms delay), "
-            "5 (IMS Signaling, Non-GBR, 100ms), 9 (Video Gaming, Non-GBR, 300ms), "
-            "65 (Mission Critical Data, GBR, 75ms), 82 (Discrete Automation, Delay-critical GBR, 10ms). "
-            "SDAP (Service Data Adaptation Protocol) maps QoS flows to DRBs in the RAN."
-        ),
-        "keywords": ["QoS", "5QI", "QFI", "GBR", "Non-GBR", "SDAP", "DRB", "packet delay"]
-    },
-    # Dual Connectivity
-    {
-        "spec_id": "TS 37.340",
-        "title": "NR; Multi-connectivity; Overall description",
-        "section": "10 Dual Connectivity operation",
-        "content": (
-            "EN-DC (E-UTRA-NR Dual Connectivity): LTE eNB is Master Node (MN), NR gNB is Secondary Node (SN). "
-            "Used in 5G NSA deployments. NR-DC: Both MN and SN are gNBs. "
-            "NGEN-DC: NR gNB is MN, LTE eNB is SN (connected to 5GC). "
-            "SN Addition procedure: MN sends SN Addition Request to SN, SN performs admission control, "
-            "SN responds with SN Addition Request Acknowledge, MN sends RRCReconfiguration to UE. "
-            "Bearer types: MCG bearer (MN only), SCG bearer (SN only), Split bearer (both). "
-            "SCG failure: SN sends SCG Failure Information to MN, MN may release SN or reconfigure."
-        ),
-        "keywords": ["EN-DC", "dual connectivity", "NSA", "MCG", "SCG", "split bearer", "SN addition"]
-    },
-    # SON / Self-Optimization
-    {
-        "spec_id": "TS 32.500",
-        "title": "Self-Organizing Networks (SON); Concepts and requirements",
-        "section": "4 SON Functions",
-        "content": (
-            "SON functions for automated network optimization: "
-            "1) Automatic Neighbour Relation (ANR): Automatic discovery and management of neighbour cell relations. "
-            "2) Mobility Robustness Optimization (MRO): Automatic tuning of handover parameters "
-            "(hysteresis, time-to-trigger, A3 offset) to minimize too-early, too-late, and wrong-cell handovers. "
-            "3) Mobility Load Balancing (MLB): Traffic offloading between cells based on load measurements. "
-            "4) RACH Optimization: Automatic adjustment of PRACH parameters for optimal access latency and success rate. "
-            "5) Coverage and Capacity Optimization (CCO): Antenna tilt and power adjustments."
-        ),
-        "keywords": ["SON", "ANR", "MRO", "MLB", "RACH optimization", "CCO", "self-organizing"]
-    },
 ]
 
+# ============================================================================
+# PURE-PYTHON BM25 RETRIEVER CLASS
+# ============================================================================
+class BM25Retriever:
+    """
+    Pure-Python BM25 retriever with zero external dependencies.
+    Optimized for fast keyword matching over 3GPP specification chunks.
+    """
+    def __init__(self, corpus: List[Dict], k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.corpus = corpus
+        self.corpus_size = len(corpus)
+        
+        self.doc_lens = []
+        self.doc_term_freqs = []
+        self.df = Counter()
+        
+        for doc in corpus:
+            # Tokenize content, section title, spec ID, and keywords combined
+            keywords_str = " ".join(doc.get("keywords", []))
+            text = f"{doc['spec_id']} {doc.get('section', '')} {doc['content']} {keywords_str}"
+            tokens = self._tokenize(text)
+            self.doc_lens.append(len(tokens))
+            self.doc_term_freqs.append(Counter(tokens))
+            
+            for token in set(tokens):
+                self.df[token] += 1
+                
+        self.avg_doc_len = sum(self.doc_lens) / max(1, self.corpus_size)
+        
+        # Calculate IDF scores
+        self.idf = {}
+        for term, freq in self.df.items():
+            # Standard BM25 IDF formula with smoothing
+            self.idf[term] = math.log((self.corpus_size - freq + 0.5) / (freq + 0.5) + 1.0)
 
+    def _tokenize(self, text: str) -> List[str]:
+        """Convert string to standard normalized tokens."""
+        return re.findall(r'[a-zA-Z0-9]{2,}', text.lower())
+
+    def retrieve(self, query: str, top_k: int = 15) -> List[Tuple[float, int]]:
+        """
+        Calculates BM25 lexical scores for all documents.
+        Returns list of (score, doc_index) sorted descending.
+        """
+        query_tokens = self._tokenize(query)
+        scores = []
+        
+        for idx in range(self.corpus_size):
+            score = 0.0
+            doc_len = self.doc_lens[idx]
+            term_freqs = self.doc_term_freqs[idx]
+            
+            for token in query_tokens:
+                if token not in self.idf:
+                    continue
+                tf = term_freqs[token]
+                idf = self.idf[token]
+                num = tf * (self.k1 + 1)
+                den = tf + self.k1 * (1 - self.b + self.b * (doc_len / self.avg_doc_len))
+                score += idf * (num / den)
+                
+            scores.append((score, idx))
+            
+        scores.sort(key=lambda x: x[0], reverse=True)
+        return scores[:top_k]
+
+
+# ============================================================================
+# MAIN SPEC RETRIEVER CLASS
+# ============================================================================
 class SpecRetriever:
     """
-    Upgraded 3GPP specification retriever.
-    Loads pre-built FAISS vector indices from disk on initialization if available.
-    Falls back gracefully to TF-IDF or keyword matching on the core knowledge base.
+    State-of-the-Art (SOTA) 3GPP specification retriever.
+    - Implements Hybrid Search (FAISS Dense Vector + BM25 Lexical).
+    - Fuses rankings using Reciprocal Rank Fusion (RRF).
+    - Refines candidates via Cross-Encoder Reranking if available.
+    - Gracefully falls back to TF-IDF/BM25 on CPU nodes.
     """
 
     def __init__(self, use_embeddings: bool = None):
         """
         Args:
-            use_embeddings: If True, force SentenceTransformer + FAISS loading.
-                            If False, force TF-IDF mode.
-                            If None (default), auto-detect based on index availability and imports.
+            use_embeddings: True to force FAISS vector search.
+                            False to force TF-IDF mode.
+                            None (default) to auto-detect.
         """
         self.knowledge_base = SPEC_KNOWLEDGE_BASE
         self.use_embeddings = use_embeddings
@@ -408,20 +370,22 @@ class SpecRetriever:
         self.tfidf_matrix = None
         self.vectorizer = None
         self.embed_model = None
+        self.bm25 = None
+        self.reranker = None
+        self.has_reranker = False
 
-        # Setup standard search directory and file paths
+        # Directory configurations
         self.index_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index")
         self.faiss_path = os.path.join(self.index_dir, "index.faiss")
         self.metadata_path = os.path.join(self.index_dir, "metadata.pkl")
 
-        # Auto-detect mode if not explicitly overridden
         if self.use_embeddings is None:
             self._autodetect_mode()
 
         self._load_or_build_index()
 
     def _autodetect_mode(self):
-        """Checks if precompiled index files and required libraries are present."""
+        """Checks if precompiled index files and libraries are present."""
         has_index_files = os.path.exists(self.faiss_path) and os.path.exists(self.metadata_path)
         if not has_index_files:
             self.use_embeddings = False
@@ -444,6 +408,9 @@ class SpecRetriever:
                 self._build_tfidf_index()
         else:
             self._build_tfidf_index()
+            
+        # Build BM25 index over the loaded specifications corpus (runs in all modes!)
+        self.bm25 = BM25Retriever(self.knowledge_base)
 
     def _load_embedding_index(self) -> bool:
         """Loads FAISS index and chunk metadata from disk."""
@@ -459,11 +426,22 @@ class SpecRetriever:
                 self.knowledge_base = pickle.load(f)
 
             print("[LOADING] Instantiating lightweight SentenceTransformer model ('all-MiniLM-L6-v2')...")
-            # Set caching directory to workspace to avoid permission issues
+            # Set cache dir to local directory
             os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.path.join(os.path.dirname(self.index_dir), "cache")
             self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
             
-            # Check dimensions match
+            # Load Cross-Encoder reranker if installed
+            try:
+                from sentence_transformers import CrossEncoder
+                print("[LOADING] Instantiating Cross-Encoder reranker ('cross-encoder/ms-marco-MiniLM-L-6-v2')...")
+                self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+                self.has_reranker = True
+                print("[SUCCESS] Cross-Encoder reranker loaded successfully.")
+            except Exception as e:
+                print(f"[WARNING] Reranker loading skipped or failed ({e}). Proceeding without reranking.")
+                self.reranker = None
+                self.has_reranker = False
+                
             dim = self.index.d
             print(f"[SUCCESS] Real RAG active: {len(self.knowledge_base)} chunks loaded ({dim}-dim vectors).")
             return True
@@ -476,7 +454,6 @@ class SpecRetriever:
         try:
             from sklearn.feature_extraction.text import TfidfVectorizer
 
-            # Combine searchable fields
             documents = []
             for entry in self.knowledge_base:
                 doc = f"{entry['spec_id']} {entry['title']} {entry['section']} {entry['content']} {' '.join(entry.get('keywords', []))}"
@@ -497,28 +474,70 @@ class SpecRetriever:
 
     def retrieve(self, query: str, top_k: int = 3) -> List[Dict]:
         """
-        Retrieve the most relevant 3GPP specification chunks for a query.
+        Retrieve the most relevant 3GPP specifications using Hybrid Search.
+        Fuses dense vector/TF-IDF rankings with BM25 lexical rankings.
         """
+        # 1. Fetch dense / TF-IDF candidates
         if self.use_embeddings and self.embed_model is not None and self.index is not None:
-            return self._retrieve_embeddings(query, top_k)
+            dense_indices = self._retrieve_dense_raw(query, top_k=15)
         elif self.vectorizer is not None:
-            return self._retrieve_tfidf(query, top_k)
+            dense_indices = self._retrieve_tfidf_raw(query, top_k=15)
         else:
-            return self._retrieve_keywords(query, top_k)
+            dense_indices = []
 
-    def _retrieve_tfidf(self, query: str, top_k: int) -> List[Dict]:
-        """TF-IDF based retrieval."""
-        from sklearn.metrics.pairwise import cosine_similarity
+        # 2. Fetch BM25 lexical candidates
+        bm25_results = self.bm25.retrieve(query, top_k=15)
+        sparse_indices = [idx for _, idx in bm25_results]
 
-        query_vec = self.vectorizer.transform([query])
-        similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
+        # 3. Reciprocal Rank Fusion (RRF)
+        # Combine dense and sparse lists
+        dense_rank = {idx: rank for rank, idx in enumerate(dense_indices)}
+        sparse_rank = {idx: rank for rank, idx in enumerate(sparse_indices)}
+        
+        all_candidates = set(dense_indices) | set(sparse_indices)
+        
+        # Constant k is 60 by standard RRF design
+        k = 60
+        rrf_scores = []
+        for idx in all_candidates:
+            # Map index to rank (use 999 if not present in one of the search modes)
+            d_rank = dense_rank.get(idx, 999)
+            s_rank = sparse_rank.get(idx, 999)
+            
+            rrf_score = (1.0 / (k + d_rank + 1)) + (1.0 / (k + s_rank + 1))
+            rrf_scores.append((rrf_score, idx))
+            
+        rrf_scores.sort(key=lambda x: x[0], reverse=True)
+        
+        # Take the top 15 fused candidates for potential reranking
+        top_candidates = rrf_scores[:15]
+        
+        # 4. Optional: Cross-Encoder Reranking
+        final_indices_with_scores = []
+        if self.has_reranker and self.reranker is not None and len(top_candidates) > 0:
+            try:
+                candidate_indices = [idx for _, idx in top_candidates]
+                # Prepare query-chunk pairs
+                pairs = [[query, self.knowledge_base[idx]["content"]] for idx in candidate_indices]
+                rerank_scores = self.reranker.predict(pairs)
+                
+                # Sort candidate indices by their rerank scores
+                reranked = sorted(zip(rerank_scores, candidate_indices), key=lambda x: x[0], reverse=True)
+                # Normalize scores to 0-1 scale for RAG interface
+                for r_score, idx in reranked[:top_k]:
+                    # Map raw logit (typically -5 to 5) to a pseudo-prob using sigmoid
+                    prob = 1.0 / (1.0 + math.exp(-r_score))
+                    final_indices_with_scores.append((prob, idx))
+            except Exception as e:
+                # Fallback to pure RRF if reranker fails at runtime
+                final_indices_with_scores = [(score, idx) for score, idx in top_candidates[:top_k]]
+        else:
+            # Fallback to standard RRF results
+            final_indices_with_scores = [(score, idx) for score, idx in top_candidates[:top_k]]
 
-        # Handle indexing boundary
-        k = min(top_k, len(self.knowledge_base))
-        top_indices = similarities.argsort()[::-1][:k]
-
+        # 5. Build final response dictionaries
         results = []
-        for idx in top_indices:
+        for score, idx in final_indices_with_scores:
             entry = self.knowledge_base[idx]
             results.append({
                 "spec_id": entry["spec_id"],
@@ -526,12 +545,13 @@ class SpecRetriever:
                 "section": entry["section"],
                 "content": entry["content"],
                 "keywords": entry.get("keywords", []),
-                "relevance_score": float(similarities[idx])
+                "relevance_score": float(score)
             })
+            
         return results
 
-    def _retrieve_embeddings(self, query: str, top_k: int) -> List[Dict]:
-        """Embedding-based retrieval using FAISS."""
+    def _retrieve_dense_raw(self, query: str, top_k: int) -> List[int]:
+        """Runs vector search and returns document index list."""
         import numpy as np
         import faiss
 
@@ -540,53 +560,18 @@ class SpecRetriever:
         
         k = min(top_k, len(self.knowledge_base))
         scores, indices = self.index.search(query_embedding.astype('float32'), k)
-        
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if idx < 0 or idx >= len(self.knowledge_base):
-                continue
-            entry = self.knowledge_base[idx]
-            results.append({
-                "spec_id": entry["spec_id"],
-                "title": entry["title"],
-                "section": entry["section"],
-                "content": entry["content"],
-                "keywords": entry.get("keywords", []),
-                "relevance_score": float(scores[0][i])
-            })
-        return results
+        return [idx for idx in indices[0] if idx >= 0]
 
-    def _retrieve_keywords(self, query: str, top_k: int) -> List[Dict]:
-        """Simple keyword matching fallback."""
-        query_words = set(query.lower().split())
+    def _retrieve_tfidf_raw(self, query: str, top_k: int) -> List[int]:
+        """Runs TF-IDF cosine similarity search and returns index list."""
+        from sklearn.metrics.pairwise import cosine_similarity
 
-        scored = []
-        for i, entry in enumerate(self.knowledge_base):
-            keywords = set(kw.lower() for kw in entry.get("keywords", []))
-            content_words = set(entry["content"].lower().split())
-            all_words = keywords | content_words
+        query_vec = self.vectorizer.transform([query])
+        similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
 
-            overlap = len(query_words & all_words)
-            keyword_hits = len(query_words & keywords)
-            score = keyword_hits * 3 + overlap
-
-            scored.append((score, i))
-
-        scored.sort(reverse=True)
         k = min(top_k, len(self.knowledge_base))
-
-        results = []
-        for score, idx in scored[:k]:
-            entry = self.knowledge_base[idx]
-            results.append({
-                "spec_id": entry["spec_id"],
-                "title": entry["title"],
-                "section": entry["section"],
-                "content": entry["content"],
-                "keywords": entry.get("keywords", []),
-                "relevance_score": score / max(1, len(query_words))
-            })
-        return results
+        top_indices = similarities.argsort()[::-1][:k]
+        return list(top_indices)
 
     def format_context(self, results: List[Dict], max_chars: int = 2000) -> str:
         """Format retrieved results into a context string."""
@@ -637,7 +622,7 @@ def build_augmented_system_prompt(
 
 if __name__ == "__main__":
     print("======================================================================")
-    print("3GPP Specification RAG Module - Self-Test")
+    print("3GPP Specification RAG Module - SOTA Hybrid Self-Test")
     print("======================================================================")
 
     # Initialize retriever
@@ -652,5 +637,5 @@ if __name__ == "__main__":
         print(f"\nQUERY: {query}")
         results = retriever.retrieve(query, top_k=2)
         for i, r in enumerate(results):
-            print(f"  [{i+1}] {r['spec_id']} - {r['section']} (Score: {r['relevance_score']:.4f})")
+            print(f"  [{i+1}] {r['spec_id']} - {r['section']} (Fused Score: {r['relevance_score']:.4f})")
             print(f"      Content: {r['content'][:120]}...")

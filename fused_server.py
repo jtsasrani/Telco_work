@@ -58,9 +58,10 @@ def load_model():
         print(f"✓ Fused model and tokenizer loaded successfully in {time.time() - start_time:.1f}s!")
         
         # Load RAG retriever
-        print("📥 Initializing 3GPP Specification RAG Index (Auto-detection mode)...")
+        print("[LOADING] Initializing 3GPP Specification SOTA Hybrid RAG Engine...")
         retriever = SpecRetriever()
-        print("✓ SpecRetriever initialized successfully.")
+        rerank_status = "Reranking Active" if retriever.has_reranker else "Reranking Inactive"
+        print(f"[SUCCESS] SpecRetriever initialized successfully (Hybrid Search: FAISS + BM25 | {rerank_status}).")
     except Exception as e:
         print(f"❌ Failed to load model or retriever from {MODEL_PATH}: {e}")
         sys.exit(1)

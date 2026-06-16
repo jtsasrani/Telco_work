@@ -26,7 +26,13 @@ CURATED_SPECS = [
     ("TS 38.213", "Physical Layer Control Procedures", "38_series", "38213"),
     ("TS 38.214", "Physical Layer Data Procedures", "38_series", "38214"),
     ("TS 38.321", "Medium Access Control MAC Protocol", "38_series", "38321"),
-    ("TS 38.304", "UE Procedures in Idle Mode", "38_series", "38304")
+    ("TS 38.304", "UE Procedures in Idle Mode", "38_series", "38304"),
+    ("TS 23.502", "5G System Core Signaling Procedures", "23_series", "23502"),
+    ("TS 38.413", "NG-RAN NG Application Protocol NGAP", "38_series", "38413"),
+    ("TS 38.473", "NG-RAN F1 Application Protocol F1AP", "38_series", "38473"),
+    ("TS 38.423", "NG-RAN Xn Application Protocol XnAP", "38_series", "38423"),
+    ("TS 38.323", "NR Packet Data Convergence Protocol PDCP", "38_series", "38323"),
+    ("TS 38.322", "NR Radio Link Control RLC Protocol", "38_series", "38322")
 ]
 
 # 3GPP Release suffix character mapping (Release 17 = h, Release 16 = g, Release 15 = f)

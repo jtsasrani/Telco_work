@@ -28,7 +28,13 @@ SPEC_TITLES = {
     "TS_38.213": "NR; Physical layer procedures for control",
     "TS_38.214": "NR; Physical layer procedures for data",
     "TS_38.321": "NR; Medium Access Control (MAC) protocol specification",
-    "TS_38.304": "NR; User Equipment (UE) procedures in Idle mode"
+    "TS_38.304": "NR; User Equipment (UE) procedures in Idle mode",
+    "TS_23.502": "Procedures for the 5G System (5GS)",
+    "TS_38.413": "NG-RAN; NG Application Protocol (NGAP)",
+    "TS_38.473": "NG-RAN; F1 Application Protocol (F1AP)",
+    "TS_38.423": "NG-RAN; Xn Application Protocol (XnAP)",
+    "TS_38.323": "NR; Packet Data Convergence Protocol (PDCP) specification",
+    "TS_38.322": "NR; Radio Link Control (RLC) protocol specification"
 }
 
 def parse_args():

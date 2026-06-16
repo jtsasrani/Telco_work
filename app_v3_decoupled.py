@@ -283,6 +283,42 @@ def get_premium_css():
     .glass-card:hover {{
         border-color: rgba(237, 28, 36, 0.15);
     }}
+    
+    /* ─── Streamlit Expander (RAG Grounded Specs) ─── */
+    div[data-testid="stExpander"] {{
+        background-color: var(--bg-card) !important;
+        border: 1px solid var(--border-subtle) !important;
+        border-radius: var(--radius-md) !important;
+        box-shadow: var(--shadow-glow-cyan) !important;
+        margin-bottom: 12px !important;
+    }}
+    
+    div[data-testid="stExpander"] details {{
+        border: none !important;
+        background-color: transparent !important;
+    }}
+
+    div[data-testid="stExpander"] summary {{
+        background-color: transparent !important;
+        color: var(--text-primary) !important;
+        font-family: var(--font-sans) !important;
+        font-weight: 600 !important;
+    }}
+    
+    div[data-testid="stExpander"] summary:hover,
+    div[data-testid="stExpander"] summary:focus,
+    div[data-testid="stExpander"] summary:active {{
+        color: var(--amd-red) !important;
+        background-color: var(--bg-card-hover) !important;
+        outline: none !important;
+        border-radius: var(--radius-md) !important;
+    }}
+
+    div[data-testid="stExpander"] [data-testid="stExpanderDetails"] {{
+        background-color: var(--bg-elevated) !important;
+        border-top: 1px solid var(--border-subtle) !important;
+        padding: 12px 16px !important;
+    }}
     .card-title {{
         font-size: 11px;
         font-weight: 700;
@@ -754,6 +790,26 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── RAG Engine Status Card ──
+    if retriever.use_embeddings:
+        rag_status_title = "Active (Vector Embeddings)"
+        rag_status_desc = f"FAISS search active with {len(retriever.knowledge_base)} document chunks."
+    else:
+        rag_status_title = "Active (TF-IDF Fallback)"
+        rag_status_desc = f"Keyword search active over {len(retriever.knowledge_base)} protocol IEs."
+
+    st.markdown(f"""
+    <div class="glass-card">
+        <div class="card-title">🔍 RAG Engine Status</div>
+        <div style="font-size: 14px; font-weight: 700; color: var(--accent-cyan); margin-bottom: 4px;">
+            {rag_status_title}
+        </div>
+        <div style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); line-height: 1.4;">
+            {rag_status_desc}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── Training Pipeline ──
     st.markdown("""
     <div class="glass-card">
@@ -883,7 +939,7 @@ def render_message(role, content, is_streaming=False):
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
     if msg.get("role") == "assistant" and msg.get("retrieved_specs"):
-        with st.expander("📚 Grounded 3GPP Reference Specifications", expanded=False):
+        with st.expander("🔍 RAG Grounded 3GPP Reference Specifications", expanded=False):
             for r in msg["retrieved_specs"]:
                 st.markdown(f"**{r['spec_id']} — Section {r['section']}** *({r['title']})*")
                 st.caption(r['content'])

@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
-from rag.spec_retriever import SpecRetriever, build_augmented_system_prompt
+from rag_pipeline.spec_retriever import SpecRetriever, build_augmented_system_prompt
 
 warnings.filterwarnings("ignore")
 
@@ -58,8 +58,8 @@ def load_model():
         print(f"✓ Fused model and tokenizer loaded successfully in {time.time() - start_time:.1f}s!")
         
         # Load RAG retriever
-        print("📥 Initializing 3GPP Specification RAG Index (TF-IDF fallback)...")
-        retriever = SpecRetriever(use_embeddings=False)
+        print("📥 Initializing 3GPP Specification RAG Index (Auto-detection mode)...")
+        retriever = SpecRetriever()
         print("✓ SpecRetriever initialized successfully.")
     except Exception as e:
         print(f"❌ Failed to load model or retriever from {MODEL_PATH}: {e}")
@@ -86,20 +86,24 @@ async def chat_completions(request: Request):
     if system_msg_idx != -1 and user_query and retriever:
         base_system_prompt = messages[system_msg_idx]["content"]
         
-        # Perform retrieval
-        start_rag = time.time()
-        results = retriever.retrieve(user_query, top_k=3)
-        print(f"🔍 [RAG] Query: '{user_query[:60]}...' -> Found {len(results)} spec citations (took {time.time() - start_rag:.3f}s).")
-        for idx, r in enumerate(results):
-            print(f"    - [{idx+1}] {r['spec_id']} Section {r['section']} (Score: {r['relevance_score']:.4f})")
-        
-        augmented_system_prompt = build_augmented_system_prompt(
-            base_system_prompt,
-            user_query,
-            retriever,
-            top_k=3
-        )
-        messages[system_msg_idx]["content"] = augmented_system_prompt
+        # Prevent double-augmentation if client/frontend already performed retrieval
+        if "--- RETRIEVED 3GPP SPECIFICATION CONTEXT ---" in base_system_prompt:
+            print("🔍 [RAG] Prompt already contains 3GPP spec context. Skipping server-side RAG.")
+        else:
+            # Perform retrieval
+            start_rag = time.time()
+            results = retriever.retrieve(user_query, top_k=3)
+            print(f"🔍 [RAG] Query: '{user_query[:60]}...' -> Found {len(results)} spec citations (took {time.time() - start_rag:.3f}s).")
+            for idx, r in enumerate(results):
+                print(f"    - [{idx+1}] {r['spec_id']} Section {r['section']} (Score: {r['relevance_score']:.4f})")
+            
+            augmented_system_prompt = build_augmented_system_prompt(
+                base_system_prompt,
+                user_query,
+                retriever,
+                top_k=3
+            )
+            messages[system_msg_idx]["content"] = augmented_system_prompt
 
     # Reconstruct prompt using Chat Template
     prompt = tokenizer.apply_chat_template(

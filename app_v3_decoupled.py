@@ -11,12 +11,12 @@ import time
 import warnings
 import subprocess
 import streamlit as st
-from rag.spec_retriever import SpecRetriever, build_augmented_system_prompt
+from rag_pipeline.spec_retriever import SpecRetriever, build_augmented_system_prompt
 
 # 📥 RAG SpecRetriever Initialization
 @st.cache_resource
 def load_spec_retriever():
-    return SpecRetriever(use_embeddings=False)
+    return SpecRetriever()
 
 retriever = load_spec_retriever()
 

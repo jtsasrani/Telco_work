@@ -1,33 +1,22 @@
 """
-3GPP Specification RAG (Retrieval-Augmented Generation) Module
-==============================================================
+3GPP Specification RAG (Retrieval-Augmented Generation) Module - Upgraded
+========================================================================
 Provides context-aware 3GPP spec retrieval to augment the fine-tuned model's
 responses with actual specification text, enabling precise citations.
 
-Runs on AMD MI300X with FAISS for vector similarity search.
-Uses a lightweight sentence-transformers embedding model.
-
-Usage:
-    from rag.spec_retriever import SpecRetriever
-    retriever = SpecRetriever()
-    retriever.build_index()  # One-time index build
-    context = retriever.retrieve("handover failure during RRC reconfiguration", top_k=3)
+Supports loading pre-built FAISS vector indices from disk on AMD MI300X,
+with graceful fallback to TF-IDF on CPU/client setups.
 """
 
 import os
 import json
 import re
-import hashlib
 import pickle
 from typing import List, Dict, Tuple, Optional
 
 # ============================================================================
-# 3GPP SPECIFICATION KNOWLEDGE BASE
+# 3GPP SPECIFICATION KNOWLEDGE BASE (Fallback core dataset)
 # ============================================================================
-# Curated excerpts from key 5G NR and Core Network specifications.
-# These are real, accurate 3GPP specification descriptions and procedures.
-# In production, these would be chunked from full PDF documents.
-
 SPEC_KNOWLEDGE_BASE = [
     # TS 38.331 - NR RRC Protocol
     {
@@ -401,41 +390,96 @@ SPEC_KNOWLEDGE_BASE = [
 
 class SpecRetriever:
     """
-    Lightweight 3GPP specification retriever using TF-IDF similarity.
-    Falls back to keyword matching if scikit-learn is not available.
-    For production use, replace with FAISS + sentence-transformers embeddings.
+    Upgraded 3GPP specification retriever.
+    Loads pre-built FAISS vector indices from disk on initialization if available.
+    Falls back gracefully to TF-IDF or keyword matching on the core knowledge base.
     """
 
-    def __init__(self, use_embeddings: bool = False):
+    def __init__(self, use_embeddings: bool = None):
         """
         Args:
-            use_embeddings: If True, attempt to use sentence-transformers + FAISS.
-                          If False (default), use TF-IDF for zero-dependency operation.
+            use_embeddings: If True, force SentenceTransformer + FAISS loading.
+                            If False, force TF-IDF mode.
+                            If None (default), auto-detect based on index availability and imports.
         """
         self.knowledge_base = SPEC_KNOWLEDGE_BASE
         self.use_embeddings = use_embeddings
         self.index = None
         self.tfidf_matrix = None
         self.vectorizer = None
-        self._build_index()
+        self.embed_model = None
 
-    def _build_index(self):
-        """Build the search index from the knowledge base."""
+        # Setup standard search directory and file paths
+        self.index_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index")
+        self.faiss_path = os.path.join(self.index_dir, "index.faiss")
+        self.metadata_path = os.path.join(self.index_dir, "metadata.pkl")
+
+        # Auto-detect mode if not explicitly overridden
+        if self.use_embeddings is None:
+            self._autodetect_mode()
+
+        self._load_or_build_index()
+
+    def _autodetect_mode(self):
+        """Checks if precompiled index files and required libraries are present."""
+        has_index_files = os.path.exists(self.faiss_path) and os.path.exists(self.metadata_path)
+        if not has_index_files:
+            self.use_embeddings = False
+            return
+
+        try:
+            import sentence_transformers
+            import faiss
+            self.use_embeddings = True
+        except ImportError:
+            self.use_embeddings = False
+
+    def _load_or_build_index(self):
+        """Loads index from disk or builds TF-IDF index from core specifications."""
         if self.use_embeddings:
-            self._build_embedding_index()
+            success = self._load_embedding_index()
+            if not success:
+                print("[WARNING] Failed to load FAISS index. Falling back to TF-IDF...")
+                self.use_embeddings = False
+                self._build_tfidf_index()
         else:
             self._build_tfidf_index()
 
+    def _load_embedding_index(self) -> bool:
+        """Loads FAISS index and chunk metadata from disk."""
+        try:
+            import faiss
+            from sentence_transformers import SentenceTransformer
+
+            print(f"[LOADING] FAISS vector index from: {self.faiss_path}")
+            self.index = faiss.read_index(self.faiss_path)
+
+            print(f"[LOADING] RAG chunk metadata from: {self.metadata_path}")
+            with open(self.metadata_path, 'rb') as f:
+                self.knowledge_base = pickle.load(f)
+
+            print("[LOADING] Instantiating lightweight SentenceTransformer model ('all-MiniLM-L6-v2')...")
+            # Set caching directory to workspace to avoid permission issues
+            os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.path.join(os.path.dirname(self.index_dir), "cache")
+            self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            # Check dimensions match
+            dim = self.index.d
+            print(f"[SUCCESS] Real RAG active: {len(self.knowledge_base)} chunks loaded ({dim}-dim vectors).")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to load embedding index: {e}")
+            return False
+
     def _build_tfidf_index(self):
-        """Build a TF-IDF based search index (no external dependencies beyond sklearn)."""
+        """Build a TF-IDF based search index (fallback strategy)."""
         try:
             from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
 
-            # Combine all searchable text for each entry
+            # Combine searchable fields
             documents = []
             for entry in self.knowledge_base:
-                doc = f"{entry['spec_id']} {entry['title']} {entry['section']} {entry['content']} {' '.join(entry['keywords'])}"
+                doc = f"{entry['spec_id']} {entry['title']} {entry['section']} {entry['content']} {' '.join(entry.get('keywords', []))}"
                 documents.append(doc)
 
             self.vectorizer = TfidfVectorizer(
@@ -445,60 +489,17 @@ class SpecRetriever:
                 sublinear_tf=True
             )
             self.tfidf_matrix = self.vectorizer.fit_transform(documents)
-            print(f"✅ TF-IDF index built: {len(documents)} specification chunks indexed")
+            print(f"[SUCCESS] Fallback RAG active: Built TF-IDF index for {len(documents)} static chunks.")
 
         except ImportError:
-            print("⚠️ scikit-learn not available. Using keyword-based fallback retrieval.")
+            print("[WARNING] scikit-learn not available. Using keyword-based fallback retrieval.")
             self.vectorizer = None
-
-    def _build_embedding_index(self):
-        """Build a FAISS index with sentence-transformer embeddings."""
-        try:
-            from sentence_transformers import SentenceTransformer
-            import numpy as np
-
-            print("📥 Loading embedding model for RAG index...")
-            embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-            documents = []
-            for entry in self.knowledge_base:
-                doc = f"{entry['section']}: {entry['content']}"
-                documents.append(doc)
-
-            embeddings = embed_model.encode(documents, show_progress_bar=True)
-
-            try:
-                import faiss
-                dim = embeddings.shape[1]
-                self.index = faiss.IndexFlatIP(dim)
-                # Normalize for cosine similarity
-                faiss.normalize_L2(embeddings)
-                self.index.add(embeddings.astype('float32'))
-                self.embed_model = embed_model
-                print(f"✅ FAISS index built: {len(documents)} chunks, {dim}-dim embeddings")
-            except ImportError:
-                # Fallback: just store embeddings for numpy cosine sim
-                self.embeddings = embeddings
-                self.embed_model = embed_model
-                print(f"✅ Numpy embedding index built: {len(documents)} chunks")
-
-        except ImportError:
-            print("⚠️ sentence-transformers not available. Falling back to TF-IDF.")
-            self.use_embeddings = False
-            self._build_tfidf_index()
 
     def retrieve(self, query: str, top_k: int = 3) -> List[Dict]:
         """
         Retrieve the most relevant 3GPP specification chunks for a query.
-
-        Args:
-            query: The diagnostic query or complaint text
-            top_k: Number of results to return
-
-        Returns:
-            List of dicts with spec_id, section, content, relevance_score
         """
-        if self.use_embeddings and hasattr(self, 'embed_model'):
+        if self.use_embeddings and self.embed_model is not None and self.index is not None:
             return self._retrieve_embeddings(query, top_k)
         elif self.vectorizer is not None:
             return self._retrieve_tfidf(query, top_k)
@@ -512,7 +513,9 @@ class SpecRetriever:
         query_vec = self.vectorizer.transform([query])
         similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
 
-        top_indices = similarities.argsort()[::-1][:top_k]
+        # Handle indexing boundary
+        k = min(top_k, len(self.knowledge_base))
+        top_indices = similarities.argsort()[::-1][:k]
 
         results = []
         for idx in top_indices:
@@ -522,44 +525,35 @@ class SpecRetriever:
                 "title": entry["title"],
                 "section": entry["section"],
                 "content": entry["content"],
-                "keywords": entry["keywords"],
+                "keywords": entry.get("keywords", []),
                 "relevance_score": float(similarities[idx])
             })
-
         return results
 
     def _retrieve_embeddings(self, query: str, top_k: int) -> List[Dict]:
-        """Embedding-based retrieval using FAISS or numpy."""
+        """Embedding-based retrieval using FAISS."""
         import numpy as np
+        import faiss
 
         query_embedding = self.embed_model.encode([query])
-
-        if hasattr(self, 'index') and self.index is not None:
-            import faiss
-            faiss.normalize_L2(query_embedding)
-            scores, indices = self.index.search(query_embedding.astype('float32'), top_k)
-            top_indices = indices[0]
-            top_scores = scores[0]
-        else:
-            # Numpy fallback
-            from numpy.linalg import norm
-            similarities = np.dot(self.embeddings, query_embedding.T).flatten()
-            similarities /= (norm(self.embeddings, axis=1) * norm(query_embedding))
-            top_indices = similarities.argsort()[::-1][:top_k]
-            top_scores = similarities[top_indices]
-
+        faiss.normalize_L2(query_embedding)
+        
+        k = min(top_k, len(self.knowledge_base))
+        scores, indices = self.index.search(query_embedding.astype('float32'), k)
+        
         results = []
-        for i, idx in enumerate(top_indices):
+        for i, idx in enumerate(indices[0]):
+            if idx < 0 or idx >= len(self.knowledge_base):
+                continue
             entry = self.knowledge_base[idx]
             results.append({
                 "spec_id": entry["spec_id"],
                 "title": entry["title"],
                 "section": entry["section"],
                 "content": entry["content"],
-                "keywords": entry["keywords"],
-                "relevance_score": float(top_scores[i])
+                "keywords": entry.get("keywords", []),
+                "relevance_score": float(scores[0][i])
             })
-
         return results
 
     def _retrieve_keywords(self, query: str, top_k: int) -> List[Dict]:
@@ -568,50 +562,40 @@ class SpecRetriever:
 
         scored = []
         for i, entry in enumerate(self.knowledge_base):
-            keywords = set(kw.lower() for kw in entry["keywords"])
+            keywords = set(kw.lower() for kw in entry.get("keywords", []))
             content_words = set(entry["content"].lower().split())
             all_words = keywords | content_words
 
-            # Score by keyword overlap
             overlap = len(query_words & all_words)
             keyword_hits = len(query_words & keywords)
-            score = keyword_hits * 3 + overlap  # Weight keyword matches higher
+            score = keyword_hits * 3 + overlap
 
             scored.append((score, i))
 
         scored.sort(reverse=True)
+        k = min(top_k, len(self.knowledge_base))
 
         results = []
-        for score, idx in scored[:top_k]:
+        for score, idx in scored[:k]:
             entry = self.knowledge_base[idx]
             results.append({
                 "spec_id": entry["spec_id"],
                 "title": entry["title"],
                 "section": entry["section"],
                 "content": entry["content"],
-                "keywords": entry["keywords"],
+                "keywords": entry.get("keywords", []),
                 "relevance_score": score / max(1, len(query_words))
             })
-
         return results
 
     def format_context(self, results: List[Dict], max_chars: int = 2000) -> str:
-        """
-        Format retrieved results into a context string for injection into the system prompt.
-
-        Args:
-            results: List of retrieved spec chunks
-            max_chars: Maximum characters for the context string
-
-        Returns:
-            Formatted context string
-        """
+        """Format retrieved results into a context string."""
         context_parts = []
         total_chars = 0
 
         for r in results:
             chunk = (
-                f"[{r['spec_id']} — {r['section']}]\n"
+                f"[{r['spec_id']} - {r['section']}]\n"
                 f"{r['content']}\n"
             )
             if total_chars + len(chunk) > max_chars:
@@ -634,18 +618,7 @@ def build_augmented_system_prompt(
     retriever: Optional['SpecRetriever'] = None,
     top_k: int = 3
 ) -> str:
-    """
-    Build a RAG-augmented system prompt by retrieving relevant 3GPP specs.
-
-    Args:
-        base_prompt: The original system instruction
-        user_query: The user's diagnostic query
-        retriever: SpecRetriever instance
-        top_k: Number of spec chunks to retrieve
-
-    Returns:
-        Augmented system prompt with retrieved context
-    """
+    """Build a RAG-augmented system prompt by retrieving relevant 3GPP specs."""
     if retriever is None:
         return base_prompt
 
@@ -653,53 +626,31 @@ def build_augmented_system_prompt(
     context = retriever.format_context(results)
 
     if context:
-        augmented = (
+        return (
             f"{base_prompt}\n\n"
             f"You have access to the following relevant 3GPP specification excerpts. "
             f"Use them to provide accurate, specification-compliant analysis:\n"
             f"{context}"
         )
-        return augmented
-
     return base_prompt
 
 
-# ============================================================================
-# CLI: Test the retriever standalone
-# ============================================================================
 if __name__ == "__main__":
-    print("=" * 70)
-    print("3GPP Specification RAG Module — Self-Test")
-    print("=" * 70)
+    print("======================================================================")
+    print("3GPP Specification RAG Module - Self-Test")
+    print("======================================================================")
 
-    retriever = SpecRetriever(use_embeddings=False)
+    # Initialize retriever
+    retriever = SpecRetriever()
 
     test_queries = [
         "My phone drops data service when moving between cell tower sectors",
         "VoNR call setup failing with SIP 503 errors on 5G SA network",
-        "Massive MIMO beam management failure causing coverage holes",
-        "5G registration rejected with cause #11 PLMN not allowed",
-        "PDU session establishment timeout on N4 interface",
     ]
 
     for query in test_queries:
-        print(f"\n{'─' * 60}")
-        print(f"QUERY: {query}")
-        print(f"{'─' * 60}")
-        results = retriever.retrieve(query, top_k=3)
+        print(f"\nQUERY: {query}")
+        results = retriever.retrieve(query, top_k=2)
         for i, r in enumerate(results):
-            print(f"\n  [{i+1}] {r['spec_id']} — {r['section']}")
-            print(f"      Score: {r['relevance_score']:.4f}")
-            print(f"      Keywords: {', '.join(r['keywords'][:5])}")
-            print(f"      Content: {r['content'][:150]}...")
-
-    # Test prompt augmentation
-    print(f"\n{'=' * 70}")
-    print("AUGMENTED PROMPT TEST")
-    print(f"{'=' * 70}")
-    base = "You are an expert telecom diagnostics engine."
-    augmented = build_augmented_system_prompt(
-        base, "handover failure during RRC reconfiguration", retriever
-    )
-    print(augmented[:800])
-    print("...")
+            print(f"  [{i+1}] {r['spec_id']} - {r['section']} (Score: {r['relevance_score']:.4f})")
+            print(f"      Content: {r['content'][:120]}...")

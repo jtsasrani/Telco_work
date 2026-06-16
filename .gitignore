@@ -14,3 +14,8 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# RAG Data and Index Caching
+3gpp_docs/
+rag_pipeline/index/
+rag_pipeline/cache/
